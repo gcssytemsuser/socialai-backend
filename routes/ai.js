@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const authMiddleware = require('../middleware/auth');
 const db = require('../database/db');
-const { generateContent, generateHashtags, improveContent } = require('../services/ai');
+const { generateContent, generateImage, generateCompletePost, generateHashtags, improveContent } = require('../services/ai');
 
 // Generate content using AI
 router.post('/generate', authMiddleware, async (req, res) => {
@@ -188,6 +188,80 @@ router.get('/suggestions', authMiddleware, async (req, res) => {
   } catch (error) {
     console.error('Suggestions error:', error);
     res.status(500).json({ error: 'Failed to get suggestions' });
+  }
+});
+
+// Generate AI Image
+router.post('/generate-image', authMiddleware, async (req, res) => {
+  try {
+    const { topic, style, platform } = req.body;
+    
+    if (!topic) {
+      return res.status(400).json({ error: 'Topic is required' });
+    }
+    
+    // Get brand settings for context
+    const brandSettings = db.prepare('SELECT * FROM brand_settings WHERE user_id = ?').get(req.user.id);
+    
+    const result = await generateImage({
+      topic,
+      style: style || 'professional',
+      platform: platform || 'general',
+      brandName: brandSettings?.brand_name,
+      industry: brandSettings?.industry
+    });
+    
+    res.json(result);
+  } catch (error) {
+    console.error('Image generation error:', error);
+    res.status(500).json({ error: 'Failed to generate image' });
+  }
+});
+
+// Generate complete post (text + image)
+router.post('/generate-complete', authMiddleware, async (req, res) => {
+  try {
+    const { topic, platform, tone, includeImage, imageStyle } = req.body;
+    
+    if (!topic) {
+      return res.status(400).json({ error: 'Topic is required' });
+    }
+    
+    // Get brand settings
+    const brandSettings = db.prepare('SELECT * FROM brand_settings WHERE user_id = ?').get(req.user.id);
+    
+    const result = await generateCompletePost({
+      topic,
+      platform: platform || 'general',
+      tone: tone || brandSettings?.tone || 'professional',
+      includeImage: includeImage !== false,
+      imageStyle: imageStyle || 'professional',
+      brandContext: brandSettings
+    });
+    
+    // Save to generation history
+    db.prepare(`
+      INSERT INTO ai_generations (user_id, prompt, generated_content, platform, model, tokens_used)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(
+      req.user.id,
+      topic,
+      result.content,
+      platform || 'general',
+      result.model || 'gpt-4',
+      result.tokensUsed || 0
+    );
+    
+    res.json({
+      content: result.content,
+      hashtags: result.hashtags || [],
+      image: result.image || null,
+      platform: platform || 'general',
+      characterCount: result.content.length
+    });
+  } catch (error) {
+    console.error('Complete post generation error:', error);
+    res.status(500).json({ error: 'Failed to generate complete post' });
   }
 });
 
